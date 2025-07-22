@@ -1,8 +1,9 @@
-import streamlit as st
+from flask import Flask, request, render_template_string
 from PIL import Image
 import torch
 
-# ラベル → 日本語＋カテゴリ
+app = Flask(__name__)
+
 label_to_category = {
     "bottle": "資源ゴミ（ペットボトル）🧴",
     "can": "資源ゴミ（缶）🥫",
@@ -35,76 +36,93 @@ label_to_category = {
     "toothbrush": "燃えないゴミ（プラスチック）🪥"
 }
 
-# 英語 → 日本語訳
-label_translation = {
-    "bottle": "ペットボトル", "can": "缶", "cup": "紙コップ", "banana": "バナナ",
-    "apple": "りんご", "orange": "みかん", "broccoli": "ブロッコリー", "carrot": "にんじん",
-    "pizza": "ピザ", "cake": "ケーキ", "laptop": "ノートパソコン", "cell phone": "携帯電話",
-    "tv": "テレビ", "microwave": "電子レンジ", "vase": "花瓶", "book": "本",
-    "newspaper": "新聞紙", "toilet paper": "トイレットペーパー", "dining table": "ダイニングテーブル",
-    "chair": "椅子", "bed": "ベッド", "person": "人", "handbag": "ハンドバッグ",
-    "shoe": "靴", "backpack": "リュック", "clock": "時計", "umbrella": "傘",
-    "scissors": "はさみ", "toothbrush": "歯ブラシ"
-}
+# モデルをロード
+model = torch.hub.load('ultralytics/yolov5', 'yolov5n', source='github')
 
-# モデル読み込み
-@st.cache_resource
-def load_model():
-    return torch.hub.load('ultralytics/yolov5', 'yolov5n', source='github')
+# HTMLテンプレート（文字列）
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ゴミ分別AI</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      padding: 1rem;
+      text-align: center;
+      background: #f4f4f4;
+    }
+    h1 {
+      margin-bottom: 1rem;
+    }
+    form {
+      margin-bottom: 2rem;
+    }
+    .result {
+      background: #fff;
+      padding: 1rem;
+      border-radius: 10px;
+      box-shadow: 0 0 10px #ccc;
+      max-width: 90%;
+      margin: auto;
+      text-align: left;
+    }
+    .item {
+      font-size: 1.1rem;
+      margin: 0.5rem 0;
+    }
+    input[type="file"] {
+      font-size: 1rem;
+    }
+    button {
+      padding: 0.5rem 1rem;
+      font-size: 1rem;
+      margin-top: 1rem;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <h1>♻️ ゴミ分別AI</h1>
+  <form method="POST" enctype="multipart/form-data">
+    <input type="file" name="file" accept="image/*" capture="environment" required />
+    <br /><br />
+    <button type="submit">AIで判別</button>
+  </form>
 
-model = load_model()
+  {% if result %}
+    <div class="result">
+      <h2>🧠 分別結果</h2>
+      {% for label, conf, category in result %}
+        <div class="item">
+          <strong>{{ label }}</strong>（信頼度: {{ '%.2f'|format(conf) }}） → {{ category }}
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+</body>
+</html>
+"""
 
-# タイトル
-st.markdown("<h1 style='text-align:center;'>♻️ ゴミ分別AI（モバイル対応）</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align:center;'>スマホで撮影して、ゴミの種類を判別しましょう！</p>", unsafe_allow_html=True)
-
-# 入力選択
-input_method = st.radio("📤 入力方法を選んでください", ["🖼️ 画像アップロード", "📷 カメラ撮影"])
-image_file = None
-
-# 画像取得
-if input_method == "🖼️ 画像アップロード":
-    uploaded_file = st.file_uploader("画像をアップロード", type=["jpg", "jpeg", "png"])
-    if uploaded_file:
-        image_file = uploaded_file
-elif input_method == "📷 カメラ撮影":
-    camera_file = st.camera_input("スマホカメラで撮影")
-    if camera_file:
-        image_file = camera_file
-
-# セッションに画像を保持
-if image_file:
-    if "image_file" not in st.session_state or st.session_state.image_file != image_file:
-        st.session_state.image_file = image_file
-        st.session_state.results_df = None
-
-# 判別・結果表示
-if "image_file" in st.session_state:
-    img = Image.open(st.session_state.image_file)
-    st.image(img, use_container_width=True, caption="📸 入力画像")
-
-    if st.session_state.get("results_df") is None:
-        with st.spinner("🤖 AIが画像を解析中です..."):
+@app.route("/", methods=["GET", "POST"])
+def index():
+    result = None
+    if request.method == "POST":
+        file = request.files.get("file")
+        if file:
+            img = Image.open(file.stream)
             results = model(img)
-            st.session_state.results_df = results.pandas().xyxy[0]
-            results.render()
+            df = results.pandas().xyxy[0]
 
-    df = st.session_state.results_df
-    st.image(results.ims[0], caption="🔍 検出された物体", use_container_width=True)
+            result = []
+            for _, row in df.iterrows():
+                label = row["name"]
+                conf = row["confidence"]
+                category = label_to_category.get(label, "⚠️ 未分類のゴミ（手動で確認してください）")
+                result.append((label, conf, category))
+    return render_template_string(HTML_TEMPLATE, result=result)
 
-    st.subheader("🧠 分別結果")
-
-    if df.empty:
-        st.warning("⚠️ ゴミが検出されませんでした。別の画像を試してください。")
-    else:
-        for _, row in df.iterrows():
-            label = row["name"]
-            conf = row["confidence"]
-            jp_name = label_translation.get(label, label)
-            category = label_to_category.get(label, "⚠️ 未分類のゴミ（手動確認）")
-            mark = "🟢" if conf >= 0.6 else "⚠️"
-
-            st.markdown(
-                f"<div style='font-size:18px;'>{mark} <b>{jp_name}</b>（信頼度: {conf:.2f}） → {category}</div>",
-                unsafe_allow_html=True
-            )
+if __name__ == "__main__":
+    app.run(debug=True)
