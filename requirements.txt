@@ -1,5 +1,5 @@
 streamlit
-torch
-ultralytics
-opencv-python-headless
+torch==2.0.1+cpu -f https://download.pytorch.org/whl/torch_stable.html
+ultralytics==8.0.198
+opencv-python-headless==4.8.0.76
 Pillow
