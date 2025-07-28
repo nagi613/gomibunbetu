@@ -89,4 +89,60 @@ if "image_file" in st.session_state:
             category = label_to_category.get(label, "⚠️ 未分類のゴミ（手動で確認してください）")
             st.write(f"- **{label}**（信頼度: {conf:.2f}） → {category}")
 
+import streamlit as st
+from huggingface_hub import hf_hub_download, login
+from ultralytics import YOLO
+
+# ────────────
+# 1. Hugging Face トークンの取得とログイン
+# ────────────
+# Streamlit の "Secrets" に保存したトークンを読み込み
+hf_token = st.secrets["HUGGINGFACE_TOKEN"]
+
+# Hugging Face 上で認証セッションを開始
+login(token=hf_token)
+
+# ────────────
+# 2. モデル読み込み関数の定義
+# ────────────
+@st.cache_resource
+def load_yolo_model(repo_id: str, filename: str) -> YOLO:
+    """
+    YOLO モデルを Hugging Face からダウンロードして読み込む関数。
+    @st.cache_resource デコレータを付けることで、
+    「一度ダウンロード・初期化したモデル」をキャッシュし、以降は再利用します。
+
+    Args:
+        repo_id (str): Hugging Face 上のリポジトリパス（例: "username/model-name"）
+        filename (str): リポジトリ内のモデルファイル名（例: "best.pt"）
+
+    Returns:
+        YOLO: 初期化済みの YOLO モデルオブジェクト
+    """
+    # モデルファイルを認証付きでダウンロード
+    model_path = hf_hub_download(
+        repo_id=repo_id,
+        filename=filename,
+        use_auth_token=hf_token
+    )
+    
+    # YOLO モデルを初期化
+    model = YOLO(model_path)
+    return model
+
+# ────────────
+# 3. 実際にモデルをロード（初回だけダウンロード／初期化される）
+# ────────────
+MODEL_REPO = "username/your-trained-yolo-repo"  # ←自分のリポジトリに書き換えてください
+MODEL_FILE = "your_model.pt"                   # ←実際のモデルファイル名に書き換えてください
+
+model = load_yolo_model(repo_id=MODEL_REPO, filename=MODEL_FILE)
+
+# ────────────
+# 4. 以降のアプリ内で `model` を使って推論できます
+# ────────────
+# 例: results = model.predict("path/to/image.jpg")
+
+
+
 
