@@ -1,2 +1,5 @@
+streamlit
 torch
 ultralytics
+opencv-python-headless
+Pillow
