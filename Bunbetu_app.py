@@ -1,6 +1,7 @@
 import streamlit as st
 from PIL import Image
 import torch
+pip install torch
 
 # 分別カテゴリ（ラベル → 日本語＋アイコン）
 label_to_category = {
