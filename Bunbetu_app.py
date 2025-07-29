@@ -1,10 +1,8 @@
 import streamlit as st
 from PIL import Image
-from huggingface_hub import hf_hub_download, login
-from ultralytics import YOLO
-import pandas as pd
+import torch
 
-# ラベル → ゴミカテゴリ（絵文字付き）
+# 分別カテゴリ（ラベル → 日本語＋アイコン）
 label_to_category = {
     "bottle": "資源ゴミ（ペットボトル）🧴",
     "can": "資源ゴミ（缶）🥫",
@@ -37,69 +35,56 @@ label_to_category = {
     "toothbrush": "燃えないゴミ（プラスチック）🪥"
 }
 
-# ──────────────────────────────
-# 1. Hugging Face 認証 & モデル準備
-# ──────────────────────────────
 
-hf_token = st.secrets["HUGGINGFACE_TOKEN"]
-login(token=hf_token)
-
+# YOLOv5 モデルの読み込み
 @st.cache_resource
-def load_yolo_model(repo_id: str, filename: str) -> YOLO:
-    model_path = hf_hub_download(repo_id=repo_id, filename=filename, use_auth_token=hf_token)
-    return YOLO(model_path)
+def load_model():
+    return torch.hub.load('ultralytics/yolov5', 'yolov5n', source='github')
 
-# ※ ここは自分のモデルリポジトリに置き換えてください
-MODEL_REPO = "your-username/your-yolo-repo"  # 例: "takashi/gomi-detector"
-MODEL_FILE = "best.pt"
+model = load_model()
 
-model = load_yolo_model(MODEL_REPO, MODEL_FILE)
-
-# ──────────────────────────────
-# 2. Streamlit UI 部分
-# ──────────────────────────────
-
-st.set_page_config(page_title="ゴミ分別AI", page_icon="♻️", layout="centered")
+# タイトルと説明
 st.title("♻️ ゴミ分別AIアプリ")
 st.write("🖼️ 画像アップロードまたは 📷 カメラ撮影でゴミの種類を判別します。")
 
+# 入力方法の選択
 input_method = st.radio("📤 画像の入力方法を選択してください", ["🖼️ 画像アップロード", "📷 カメラ撮影"])
-
-# 入力欄をラップして、UIのエラー防止
-input_area = st.empty()
 image_file = None
 
-with input_area:
-    if input_method == "🖼️ 画像アップロード":
-        uploaded_file = st.file_uploader("画像をアップロードしてください", type=["jpg", "jpeg", "png"])
-        if uploaded_file:
-            image_file = uploaded_file
-    else:
-        camera_file = st.camera_input("カメラで撮影してください")
-        if camera_file:
-            image_file = camera_file
+# 入力処理
+if input_method == "🖼️ 画像アップロード":
+    uploaded_file = st.file_uploader("画像をアップロードしてください", type=["jpg", "jpeg", "png"])
+    if uploaded_file:
+        image_file = uploaded_file
+elif input_method == "📷 カメラ撮影":
+    camera_file = st.camera_input("カメラで撮影してください")
+    if camera_file:
+        image_file = camera_file
 
-# ──────────────────────────────
-# 3. 推論処理
-# ──────────────────────────────
-
+# セッションに画像を保存して再判別を制御
 if image_file:
-    img = Image.open(image_file)
-    st.image(img, use_container_width=True, caption="📸 入力画像")
+    if "image_file" not in st.session_state or st.session_state.image_file != image_file:
+        st.session_state.image_file = image_file
+        st.session_state.results_df = None
 
-    with st.spinner("🤖 ゴミを判別中です..."):
-        results = model.predict(img)
-        boxes = results[0].boxes
+# AI判別と表示
+if "image_file" in st.session_state:
+    img = Image.open(st.session_state.image_file)
+    st.image(img, use_container_width=True, caption="📸 入力された画像")
 
-        if boxes is None or len(boxes) == 0:
-            st.warning("⚠️ ゴミが検出されませんでした。別の画像でお試しください。")
-        else:
-            st.subheader("🧠 分別結果")
+    if st.session_state.get("results_df") is None:
+        with st.spinner("🤖 AIがゴミを判別中です..."):
+            results = model(img)
+            st.session_state.results_df = results.pandas().xyxy[0]
 
-            for box in boxes:
-                label_id = int(box.cls[0])
-                conf = float(box.conf[0])
-                label = model.names[label_id]
-                category = label_to_category.get(label, "⚠️ 未分類（手動確認）")
+    df = st.session_state.results_df
 
-                st.write(f"- **{label}**（信頼度: {conf:.2f}）→ {category}")
+    if df.empty:
+        st.warning("⚠️ ゴミが検出されませんでした。別の画像で試してください。")
+    else:
+        st.subheader("🧠 分別結果")
+        for _, row in df.iterrows():
+            label = row["name"]
+            conf = row["confidence"]
+            category = label_to_category.get(label, "⚠️ 未分類のゴミ（手動で確認してください）")
+            st.write(f"- **{label}**（信頼度: {conf:.2f}） → {category}")
